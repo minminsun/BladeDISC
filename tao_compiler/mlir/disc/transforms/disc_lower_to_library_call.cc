@@ -204,9 +204,13 @@ struct DotGeneralOpConvertor : public OpRewritePattern<DotGeneralOp> {
 
     int rank = op.getOperand(0).getType().cast<MemRefType>().getRank();
     for (auto&& z : llvm::zip(lhs_batching_dims, rhs_batching_dims)) {
-      if ((std::get<0>(z) >= rank - 2) || (std::get<1>(z) >= rank - 2)) {
+      if ((std::get<0>(z) >= rank - 1) || (std::get<1>(z) >= rank - 1)) {
         return op.emitOpError() << "unsupported batch dims.";
       }
+    }
+
+    if (lhs_batching_dims.size() != rank - 2 || rhs_batching_dims.size() != rank - 2 ) {
+      return op.emitOpError() << "unsupported batch dim numbers.";
     }
 
     auto lhs_contracting_dims =
@@ -219,22 +223,60 @@ struct DotGeneralOpConvertor : public OpRewritePattern<DotGeneralOp> {
       return op.emitOpError()
              << "DotGeneralOp only supports 1 dimensional contracting.";
     }
-    if (((lhs_contracting_dims[0] != rank - 1) &&
-         (lhs_contracting_dims[0] != rank - 2)) ||
-        ((rhs_contracting_dims[0] != rank - 1) &&
-         (rhs_contracting_dims[0] != rank - 2))) {
-      return op.emitOpError()
-             << "DotGeneral only support contracting through the last "
-                "two dimensions.";
+    // if (((lhs_contracting_dims[0] != rank - 1) &&
+    //      (lhs_contracting_dims[0] != rank - 2)) ||
+    //     ((rhs_contracting_dims[0] != rank - 1) &&
+    //      (rhs_contracting_dims[0] != rank - 2))) {
+    //   return op.emitOpError()
+    //          << "DotGeneral only support contracting through the last "
+    //             "two dimensions.";
+    // }
+
+    bool tp_lhs = (lhs_contracting_dims[0] != (rank - 1));
+    bool tp_rhs = (rhs_contracting_dims[0] == (rank - 1));
+
+    int gdim_lhs = rank - 2;
+    for (int i = 0; i < rank; ++i) {
+      bool is_gdim = true;
+      for (auto j : lhs_batching_dims) {
+        if (i == j) {
+          is_gdim = false;
+          break;
+        }
+      }
+      if (is_gdim) {
+        gdim_lhs = i;
+        break;
+      }
     }
 
-    bool tp_lhs = (lhs_contracting_dims[0] == (rank - 2));
-    bool tp_rhs = (rhs_contracting_dims[0] == (rank - 1));
+    int gdim_rhs = rank - 2;
+    for (int i = 0; i < rank; ++i) {
+      bool is_gdim = true;
+      for (auto j : rhs_batching_dims) {
+        if (i == j) {
+          is_gdim = false;
+          break;
+        }
+      }
+      if (is_gdim) {
+        gdim_rhs = i;
+        break;
+      }
+    }
 
     newOperands.push_back(rewriter.create<arith::ConstantIntOp>(
         op.getLoc(), tp_lhs, /*bitWidth*/ 1));
     newOperands.push_back(rewriter.create<arith::ConstantIntOp>(
         op.getLoc(), tp_rhs, /*bitWidth*/ 1));
+
+    if (rank > 2) {
+    // if (gdim_lhs != rank - 2 || gdim_rhs != rank - 2) {
+      newOperands.push_back(rewriter.create<arith::ConstantIntOp>(
+          op.getLoc(), gdim_lhs, /*bitWidth*/ 64));
+      newOperands.push_back(rewriter.create<arith::ConstantIntOp>(
+          op.getLoc(), gdim_rhs, /*bitWidth*/ 64));
+    }
 
     bool on_gpu = placement_utils::isGpuMemRef(op->getOperand(2));
     rewriter.replaceOpWithNewOp<DispatchOp>(op, llvm::None, ctx, newOperands,

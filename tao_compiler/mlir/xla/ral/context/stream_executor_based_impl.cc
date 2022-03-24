@@ -373,11 +373,21 @@ int64_t GetBatchSize(MemRefType<T, N> memref) {
   }
   return batch;
 }
+bool blade_batch_gemm(void* s, bool fp16_in, bool fp16_out,
+                      const void* a, std::vector<int> as,
+                      int a_bdim0, int a_bdim1, int a_gdim0, int a_gdim1, bool tp_a,
+                      const void* b, std::vector<int> bs,
+                      int b_bdim0, int b_bdim1, int b_gdim0, int b_gdim1, bool tp_b,
+                      void* c, std::vector<int> cs,
+                      int c_bdim0, int c_bdim1, int c_gdim0, int c_gdim1) {
+  return false;
+}
 
 template <typename InT, typename OutT, int N, typename E = float>
-void ral_batch_gemm(ExecutionContext* ctx, void* stream_handle,
+void ral_batch_gemm_ex(ExecutionContext* ctx, void* stream_handle,
                     MemRefType<InT, N> A, MemRefType<InT, N> B,
-                    MemRefType<OutT, N> C, bool tp_a, bool tp_b) {
+                    MemRefType<OutT, N> C, bool tp_a, bool tp_b,
+                    int64_t gdim_a, int64_t gdim_b) {
   if (isEmptyMemref(A) || isEmptyMemref(B) || isEmptyMemref(C)) {
     TAO_VLOG(1) << "ral_batch_gemm: early return for empty tensor";
     return;
@@ -392,6 +402,35 @@ void ral_batch_gemm(ExecutionContext* ctx, void* stream_handle,
 
   if (batch_a != batch_b || batch_a != batch_c) {
     ctx->signalError(Context::FAILURE, "mismatch batch size");
+    return;
+  }
+
+  if (std::is_same<InT, Eigen::half>::value || std::is_same<InT, float>::value) {
+    auto gpu_driver = ctx->getDriver<GPUDriver>(GPUDriver::name());
+    auto stream =
+       static_cast<se::Stream*>(gpu_driver->asSEStream(ctx, stream_handle));
+    void* s = stream->implementation()->GpuStreamHack();
+    bool fp16_in = std::is_same<InT, Eigen::half>::value;
+    bool fp16_out = std::is_same<OutT, Eigen::half>::value;
+    std::vector<int> a_sizes(N);
+    std::vector<int> b_sizes(N);
+    std::vector<int> c_sizes(N);
+    for (int i = 0; i < N; ++i) {
+      a_sizes[i] = A.sizes[i];
+      b_sizes[i] = B.sizes[i];
+      c_sizes[i] = C.sizes[i];
+    }
+    bool ret = blade_batch_gemm(s, fp16_in, fp16_out,
+              A.data, a_sizes, -1, -1, gdim_a, N - 1, tp_a,
+              B.data, b_sizes, -1, -1, gdim_b, N - 1, tp_b,
+              C.data, c_sizes, -1, -1, N - 2, N - 1);
+    if (ret) {
+      return;
+    }
+  }
+
+  if (gdim_a != N - 2 || gdim_b != N - 2) {
+    ctx->signalError(Context::FAILURE, "batch dims not supported by cublas");
     return;
   }
 
@@ -429,6 +468,14 @@ void ral_batch_gemm(ExecutionContext* ctx, void* stream_handle,
   if (!s) {
     ctx->signalError(Context::FAILURE, "fail to launch gemm");
   }
+}
+
+template <typename InT, typename OutT, int N, typename E = float>
+void ral_batch_gemm(ExecutionContext* ctx, void* stream_handle,
+                    MemRefType<InT, N> A, MemRefType<InT, N> B,
+                    MemRefType<OutT, N> C, bool tp_a, bool tp_b) {
+  ral_batch_gemm_ex<InT, OutT, N, E>(ctx, stream_handle, A, B,
+                                     C, tp_a, tp_b, N - 2, N - 2);
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -1277,6 +1324,8 @@ TAO_RAL_API("ral_gemm", "gpu",
             gpu::se_impl::ral_gemm<Eigen::half, Eigen::half>);
 TAO_RAL_API("ral_gemm", "gpu", gpu::se_impl::ral_batch_gemm<float, float, 3>);
 TAO_RAL_API("ral_gemm", "gpu", gpu::se_impl::ral_batch_gemm<float, float, 4>);
+TAO_RAL_API("ral_gemm", "gpu", gpu::se_impl::ral_batch_gemm_ex<float, float, 3>);
+TAO_RAL_API("ral_gemm", "gpu", gpu::se_impl::ral_batch_gemm_ex<float, float, 4>);
 TAO_RAL_API("ral_gemm", "gpu",
             gpu::se_impl::ral_batch_gemm<double, double, 3, double>);
 TAO_RAL_API("ral_gemm", "gpu",
@@ -1285,6 +1334,10 @@ TAO_RAL_API("ral_gemm", "gpu",
             gpu::se_impl::ral_batch_gemm<Eigen::half, Eigen::half, 3>);
 TAO_RAL_API("ral_gemm", "gpu",
             gpu::se_impl::ral_batch_gemm<Eigen::half, Eigen::half, 4>);
+TAO_RAL_API("ral_gemm", "gpu",
+            gpu::se_impl::ral_batch_gemm_ex<Eigen::half, Eigen::half, 3>);
+TAO_RAL_API("ral_gemm", "gpu",
+            gpu::se_impl::ral_batch_gemm_ex<Eigen::half, Eigen::half, 4>);
 #ifdef BLAZE_OPT
 TAO_RAL_API("ral_gemm", "gpu", gpu::se_impl::ral_gemm<Eigen::half, float>);
 TAO_RAL_API("ral_gemm", "gpu",
