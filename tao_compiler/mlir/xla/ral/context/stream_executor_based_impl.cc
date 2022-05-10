@@ -1248,6 +1248,19 @@ bool PickBestAlgorithm(CudnnConvParams& params,
   return true;
 }  // namespace gpu_conv_impl
 
+static bool layout_match(const std::vector<int32_t>& ref,
+                         MemRefType<int32_t, 1> metadata) {
+  if (ref.size() > metadata.sizes[0]) {
+    return false;
+  }
+  for (size_t i = 0; i < ref.size(); ++i) {
+    if (ref[i] != metadata.data[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 template <typename T, int N>
 void ral_conv(ExecutionContext* ctx, void* stream_handle,
               MemRefType<T, N> input, MemRefType<T, N> kernel,
@@ -1257,6 +1270,75 @@ void ral_conv(ExecutionContext* ctx, void* stream_handle,
   if (isEmptyMemref(input) || isEmptyMemref(kernel) || isEmptyMemref(output)) {
     TAO_VLOG(1) << "ral_conv: early return for empty tensor";
     return;
+  }
+
+  // nchw=0123 iohw=0123
+  // const std::vector<int32_t> nchw_oihw_layout = {0, 1, 2, 3, 1, 0,
+  //                                                2, 3, 0, 1, 2, 3};
+  // const std::vector<int32_t> nhwc_hwio_layout = {0, 3, 1, 2, 2, 3,
+  //                                                0, 1, 0, 3, 1, 2};
+  const std::vector<int32_t> nhwc_ohwi_layout = {0, 3, 1, 2, 3, 0,
+                                                 1, 2, 0, 3, 1, 2};
+  if (layout_match(nhwc_ohwi_layout, metadata)) {
+    auto gpu_driver = ctx->getDriver<GPUDriver>(GPUDriver::name());
+    auto stream =
+        static_cast<se::Stream*>(gpu_driver->asSEStream(ctx, stream_handle));
+    void* s = stream->implementation()->GpuStreamHack();
+    int32_t n = input.sizes[0];
+    assert(n == output.sizes[0]);
+    T* a_data = input.data;
+    T* b_data = kernel.data;
+    T* c_data = output.data;
+    int32_t ic = 0;
+    int32_t oc = 0;
+    int32_t ih = 0;
+    int32_t iw = 0;
+    int32_t oh = 0;
+    int32_t ow = 0;
+    int32_t kh = 0;
+    int32_t kw = 0;
+    int32_t ki = 0;
+    int32_t ko = 0;
+    ih = input.sizes[1];
+    iw = input.sizes[2];
+    ic = input.sizes[3];
+    ko = kernel.sizes[0];
+    kh = kernel.sizes[1];
+    kw = kernel.sizes[2];
+    ki = kernel.sizes[3];
+    oh = output.sizes[1];
+    ow = output.sizes[2];
+    oc == output.sizes[3];
+    assert(ko == oc);
+    int pad_h = padding.data[0];
+    int pad_w = padding.data[2];
+    size_t offset = N * 3;
+    int stride_h = metadata.data[offset++];
+    int stride_w = metadata.data[offset++];
+    int dilation_h = metadata.data[offset++];
+    int dilation_w = metadata.data[offset++];
+    bool is_depthwise = false;
+    int32_t groups = 1;
+    if (ic != ki) {
+      assert(ki == 1);
+      is_depthwise = true;
+      groups = ic;
+    }
+    auto conv_kind = blade::ConvKind::kFprop;
+    auto data_layout = blade::Layout::kNHWC;
+    auto kernel_layout = blade::Layout::kNHWC;
+    bool fp16_in = std::is_same<T, Eigen::half>::value;
+    bool fp16_out = std::is_same<T, Eigen::half>::value;
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    bool ret = false;
+    ret = blade::conv2d(s, fp16_in, fp16_out, conv_kind, data_layout,
+                        kernel_layout, n, ih, iw, ic, ko, kh, kw, oh, ow, pad_h,
+                        pad_w, stride_h, stride_w, dilation_h, dilation_w,
+                        groups, &alpha, a_data, b_data, &beta, c_data, c_data);
+    if (ret) {
+      return;
+    }
   }
 
   if (TAO_VLOG_IS_ON(2)) {
