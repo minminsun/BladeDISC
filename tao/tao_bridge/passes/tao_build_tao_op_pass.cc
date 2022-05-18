@@ -40,6 +40,7 @@ namespace {
 struct XlaClusterInfo {
   std::vector<NodeBuilder::NodeOut> constant_inputs;
   std::vector<NodeBuilder::NodeOut> fixed_shape_inputs;
+  std::vector<NodeBuilder::NodeOut> fixed_shape_data_inputs;
   std::vector<NodeBuilder::NodeOut> non_const_or_fixedshape_host_inputs;
   std::vector<NodeBuilder::NodeOut> non_const_or_fixedshape_device_inputs;
   std::vector<NodeBuilder::NodeOut> resource_inputs;
@@ -55,12 +56,15 @@ NodeBuilder::NodeOut IncomingEdgeAsOutput(const Edge* e) {
 Status GetXlaClusterInfo(Node* n, XlaClusterInfo* result) {
   int num_constant_inputs = 0;
   int num_fixed_shape_inputs = 0;
+  int num_fixed_shape_data_inputs = 0;
   int num_non_const_or_fixedshape_host_inputs = 0;
   int num_resource_inputs = 0;
   TF_RETURN_IF_ERROR(
       GetNodeAttr(n->attrs(), kXlaNumConstantArgsAttr, &num_constant_inputs));
   TF_RETURN_IF_ERROR(GetNodeAttr(n->attrs(), kMlirNumFixedShapeArgsAttr,
                                  &num_fixed_shape_inputs));
+  TF_RETURN_IF_ERROR(GetNodeAttr(n->attrs(), kMlirNumFixedShapeDataArgsAttr,
+                                 &num_fixed_shape_data_inputs));
   TF_RETURN_IF_ERROR(GetNodeAttr(n->attrs(), kMlirNumHostArgsAttr,
                                  &num_non_const_or_fixedshape_host_inputs));
   TF_RETURN_IF_ERROR(
@@ -68,7 +72,8 @@ Status GetXlaClusterInfo(Node* n, XlaClusterInfo* result) {
 
   int num_non_const_or_fixedshape_device_inputs =
       n->num_inputs() - num_constant_inputs - num_fixed_shape_inputs -
-      num_non_const_or_fixedshape_host_inputs - num_resource_inputs;
+      num_fixed_shape_data_inputs - num_non_const_or_fixedshape_host_inputs -
+      num_resource_inputs;
 
   if (num_constant_inputs < 0 || num_resource_inputs < 0 ||
       num_non_const_or_fixedshape_host_inputs < 0 ||
@@ -87,10 +92,15 @@ Status GetXlaClusterInfo(Node* n, XlaClusterInfo* result) {
     } else if (idx < num_constant_inputs + num_fixed_shape_inputs) {
       result->fixed_shape_inputs.push_back(IncomingEdgeAsOutput(e));
     } else if (idx < num_constant_inputs + num_fixed_shape_inputs +
+                         num_fixed_shape_data_inputs) {
+      result->fixed_shape_data_inputs.push_back(IncomingEdgeAsOutput(e));
+    } else if (idx < num_constant_inputs + num_fixed_shape_inputs +
+                         num_fixed_shape_data_inputs +
                          num_non_const_or_fixedshape_host_inputs) {
       result->non_const_or_fixedshape_host_inputs.push_back(
           IncomingEdgeAsOutput(e));
     } else if (idx < num_constant_inputs + num_fixed_shape_inputs +
+                         num_fixed_shape_data_inputs +
                          num_non_const_or_fixedshape_host_inputs +
                          num_non_const_or_fixedshape_device_inputs) {
       result->non_const_or_fixedshape_device_inputs.push_back(
@@ -308,6 +318,8 @@ Status ReplaceNodeWithTaoLaunchOp(const GraphOptimizationPassOptions& options,
   VLOG(1) << "const_input size: " << cluster_info.constant_inputs.size();
   VLOG(1) << "fixed_shape_input size: "
           << cluster_info.fixed_shape_inputs.size();
+  VLOG(1) << "fixed_shape_data_input size: "
+          << cluster_info.fixed_shape_data_inputs.size();
   VLOG(1) << "host args size: "
           << cluster_info.non_const_or_fixedshape_host_inputs.size();
   VLOG(1) << "host rets size: " << cluster_info.host_rets.size();
@@ -316,6 +328,7 @@ Status ReplaceNodeWithTaoLaunchOp(const GraphOptimizationPassOptions& options,
       inner ? NodeBuilder(n->name() + "_tao_mlir_launch", "TaoMlirLaunch")
                   .Input(cluster_info.constant_inputs)
                   .Input(cluster_info.fixed_shape_inputs)
+                  .Input(cluster_info.fixed_shape_data_inputs)
                   .Input(cluster_info.non_const_or_fixedshape_host_inputs)
                   .Input(cluster_info.non_const_or_fixedshape_device_inputs)
                   .Input(cluster_info.resource_inputs)
@@ -348,6 +361,7 @@ Status ReplaceNodeWithTaoLaunchOp(const GraphOptimizationPassOptions& options,
       NodeBuilder(n->name() + "_disc_launch", "DiscLaunch")
           .Input(cluster_info.constant_inputs)
           .Input(cluster_info.fixed_shape_inputs)
+          .Input(cluster_info.fixed_shape_data_inputs)
           .Input(cluster_info.non_const_or_fixedshape_host_inputs)
           .Input(cluster_info.non_const_or_fixedshape_device_inputs)
           .Input(cluster_info.resource_inputs)
