@@ -110,6 +110,10 @@ extern const char* const kXlaNumResourceArgsAttr;
 // may only be non-zero for inner Mlir
 extern const char* const kMlirNumFixedShapeArgsAttr;
 
+// Name of the attribute containing the number of fixed shape data arguments.
+// may only be non-zero for inner Mlir
+extern const char* const kMlirNumFixedShapeDataArgsAttr;
+
 // ordinal arguments of launch op that are expected to be placed on
 // cpu in the launch op registration.
 // If the launch op is placed on cpu, this attribute is ignored.
