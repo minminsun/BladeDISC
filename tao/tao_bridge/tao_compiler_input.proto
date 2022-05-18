@@ -79,6 +79,7 @@ enum ArgumentKind {
   kTensorList = 16;
   kFixedShaped = 17;
   kHostArgs = 18;
+  kFixedShapedData = 19;
 };
 
 // Why assign the enum value starting from 10: Forbid using their int values

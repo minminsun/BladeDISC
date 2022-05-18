@@ -59,14 +59,15 @@ class DiscLaunchOp : public LaunchBase {
   TF_DISALLOW_COPY_AND_ASSIGN(DiscLaunchOp);
 };
 
-#define REGISTER_DISC_LAUNCH_KERNEL(DEVICE)              \
-  REGISTER_KERNEL_BUILDER(Name("DiscLaunch")             \
-                              .Device(DEVICE)            \
-                              .HostMemory("constants")   \
-                              .HostMemory("fixedshapes") \
-                              .HostMemory("hostargs")    \
-                              .HostMemory("hostresults") \
-                              .HostMemory("resources"),  \
+#define REGISTER_DISC_LAUNCH_KERNEL(DEVICE)                  \
+  REGISTER_KERNEL_BUILDER(Name("DiscLaunch")                 \
+                              .Device(DEVICE)                \
+                              .HostMemory("constants")       \
+                              .HostMemory("fixedshapes")     \
+                              .HostMemory("fixedshapedatas") \
+                              .HostMemory("hostargs")        \
+                              .HostMemory("hostresults")     \
+                              .HostMemory("resources"),      \
                           DiscLaunchOp)
 
 }  //  namespace tao

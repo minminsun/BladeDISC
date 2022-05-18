@@ -590,15 +590,18 @@ uint64 TaoCompilationCache::Signature::Hash::operator()(
 
 Status TaoCompilationCache::BuildSignature(
     const NameAttrList& function, const std::map<int, Tensor>& constant_args,
-    const std::set<int>& fixed_shape_args, const std::set<int>& host_args,
+    const std::set<int>& fixed_shape_args,
+    const std::set<int>& fixed_shape_data_args, const std::set<int>& host_args,
     const std::map<int, OptionalTensor>& variable_args, OpKernelContext* ctx,
     Signature* signature, bool is_mlir) {
   signature->name = Canonicalize(function.name(), AttrSlice(&function.attr()));
   signature->arg_values.reserve(constant_args.size());
   if (is_mlir) {
-    signature->arg_types.reserve(fixed_shape_args.size());
+    signature->arg_types.reserve(fixed_shape_args.size() +
+                                 fixed_shape_data_args.size());
     signature->arg_ranks.reserve(ctx->num_inputs() - constant_args.size() -
-                                 fixed_shape_args.size());
+                                 fixed_shape_args.size() -
+                                 fixed_shape_data_args.size());
   } else {
     signature->arg_types.reserve(ctx->num_inputs() - constant_args.size());
   }
@@ -616,7 +619,8 @@ Status TaoCompilationCache::BuildSignature(
         signature->arg_types.emplace_back(tensorflow::DT_INVALID,
                                           TensorShape());
       }
-    } else if ((!is_mlir) || (fixed_shape_args.count(i))) {
+    } else if ((!is_mlir) || (fixed_shape_args.count(i)) ||
+               (fixed_shape_data_args.count(i))) {
       signature->arg_types.emplace_back(ctx->input_dtype(i),
                                         ctx->input(i).shape());
     } else {
@@ -657,7 +661,8 @@ Status SerializeFunctionLibrary(TaoCompilerInput* compiler_input,
 
 Status PrepareCompilerInput(
     const NameAttrList& function, const std::map<int, Tensor>& constant_args,
-    const std::set<int>& fixed_shape_args, const std::set<int>& host_args,
+    const std::set<int>& fixed_shape_args,
+    const std::set<int>& fixed_shape_data_args, const std::set<int>& host_args,
     const std::map<int, OptionalTensor>& variable_args, OpKernelContext* ctx,
     TaoCompilerInput* compiler_input, bool is_mlir = false) {
   auto& options = *(compiler_input->mutable_options());
@@ -709,6 +714,9 @@ Status PrepareCompilerInput(
         if (fixed_shape_args.count(input_num) > 0) {
           // only used for Mlir dynamic shape compiler
           arg->set_kind_v2(ArgumentKind::kFixedShaped);
+        } else if (fixed_shape_data_args.count(input_num) > 0) {
+          // only used for Mlir dynamic shape compiler
+          arg->set_kind_v2(ArgumentKind::kFixedShapedData);
         } else if (host_args.count(input_num)) {
           arg->set_kind_v2(ArgumentKind::kHostArgs);
         } else {
@@ -953,12 +961,14 @@ Status CompileFunction(const std::string& func_name,
 
 uint64 TaoCompilationCache::GetSignatureHash(
     const NameAttrList& function, const std::map<int, Tensor>& constant_args,
-    const std::set<int>& fixed_shape_args, const std::set<int>& host_args,
+    const std::set<int>& fixed_shape_args,
+    const std::set<int>& fixed_shape_data_args, const std::set<int>& host_args,
     const std::map<int, OptionalTensor>& variable_args, OpKernelContext* ctx,
     bool is_mlir) {
   Signature signature;
-  BuildSignature(function, constant_args, fixed_shape_args, host_args,
-                 variable_args, ctx, &signature, is_mlir);
+  BuildSignature(function, constant_args, fixed_shape_args,
+                 fixed_shape_data_args, host_args, variable_args, ctx,
+                 &signature, is_mlir);
   Signature::Hash hash;
   auto hash_sig = hash(signature);
   return hash_sig;
@@ -967,7 +977,8 @@ uint64 TaoCompilationCache::GetSignatureHash(
 Status TaoCompilationCache::Compile(
     std::unique_ptr<TaoCompilerInput> input, const NameAttrList& function,
     const std::map<int, Tensor>& constant_args,
-    const std::set<int>& fixed_shape_args, const std::set<int>& host_args,
+    const std::set<int>& fixed_shape_args,
+    const std::set<int>& fixed_shape_data_args, const std::set<int>& host_args,
     const std::map<int, OptionalTensor>& variable_args, OpKernelContext* ctx,
     Executable** executable, TaoProfileStat** stat, bool is_mlir,
     TaoCompileFuncCallInfo* call_info) {
@@ -976,8 +987,8 @@ Status TaoCompilationCache::Compile(
   }
   if (async_compilation_) {
     return CompileImplAsync(std::move(input), function, constant_args,
-                            fixed_shape_args, host_args, variable_args, ctx,
-                            executable, is_mlir, call_info);
+                            fixed_shape_args, fixed_shape_data_args, host_args,
+                            variable_args, ctx, executable, is_mlir, call_info);
   } else {
 #ifdef BLAZE_OPT
     mutex_lock global_lock(global_mu_);
@@ -991,8 +1002,8 @@ Status TaoCompilationCache::Compile(
     }
     cache_updated_ = false;
     status = CompileImpl(std::move(input), function, constant_args,
-                         fixed_shape_args, host_args, variable_args, ctx,
-                         executable, is_mlir, call_info);
+                         fixed_shape_args, fixed_shape_data_args, host_args,
+                         variable_args, ctx, executable, is_mlir, call_info);
     if (status.ok() && cache_updated_ && !tao_cache_dump_path_.empty()) {
       auto dump_status = DumpToFile(tao_cache_dump_path_);
       if (!dump_status.ok()) {
@@ -1002,8 +1013,8 @@ Status TaoCompilationCache::Compile(
     return status;
 #else
     return CompileImpl(std::move(input), function, constant_args,
-                       fixed_shape_args, host_args, variable_args, ctx,
-                       executable, is_mlir, call_info);
+                       fixed_shape_args, fixed_shape_data_args, host_args,
+                       variable_args, ctx, executable, is_mlir, call_info);
 #endif
   }
 }
@@ -1087,7 +1098,8 @@ void TaoCompilationCache::StartProfileStatHandleThread() {
 Status TaoCompilationCache::CompileImpl(
     std::unique_ptr<TaoCompilerInput> input_ptr, const NameAttrList& function,
     const std::map<int, Tensor>& constant_args,
-    const std::set<int>& fixed_shape_args, const std::set<int>& host_args,
+    const std::set<int>& fixed_shape_args,
+    const std::set<int>& fixed_shape_data_args, const std::set<int>& host_args,
     const std::map<int, OptionalTensor>& variable_args, OpKernelContext* ctx,
     Executable** executable, bool is_mlir, TaoCompileFuncCallInfo* call_info) {
   CHECK(constant_args.size() + variable_args.size() <=
@@ -1096,8 +1108,8 @@ Status TaoCompilationCache::CompileImpl(
   auto& input = *input_ptr;
   Signature signature;
   TF_RETURN_IF_ERROR(BuildSignature(function, constant_args, fixed_shape_args,
-                                    host_args, variable_args, ctx, &signature,
-                                    is_mlir));
+                                    fixed_shape_data_args, host_args,
+                                    variable_args, ctx, &signature, is_mlir));
 
   VLOG(2) << "Signature: " << SignatureDebugString(signature);
 
@@ -1186,9 +1198,9 @@ Status TaoCompilationCache::CompileImpl(
     }
 
     if (blade_mode != "serve") {
-      entry->compilation_status =
-          PrepareCompilerInput(function, constant_args, fixed_shape_args,
-                               host_args, variable_args, ctx, &input, is_mlir);
+      entry->compilation_status = PrepareCompilerInput(
+          function, constant_args, fixed_shape_args, fixed_shape_data_args,
+          host_args, variable_args, ctx, &input, is_mlir);
       TF_RETURN_IF_ERROR(entry->compilation_status);
 
       if (blade_mode != "compile") {
@@ -1230,7 +1242,8 @@ Status TaoCompilationCache::CompileImpl(
 Status TaoCompilationCache::CompileImplAsync(
     std::unique_ptr<TaoCompilerInput> input_ptr, const NameAttrList& function,
     const std::map<int, Tensor>& constant_args,
-    const std::set<int>& fixed_shape_args, const std::set<int>& host_args,
+    const std::set<int>& fixed_shape_args,
+    const std::set<int>& fixed_shape_data_args, const std::set<int>& host_args,
     const std::map<int, OptionalTensor>& variable_args, OpKernelContext* ctx,
     Executable** executable, bool is_mlir, TaoCompileFuncCallInfo* call_info) {
   VLOG(2) << "TaoCompilationCache::CompileImplAsync is called...";
@@ -1243,8 +1256,8 @@ Status TaoCompilationCache::CompileImplAsync(
   auto& input = *input_ptr;
   Signature signature;
   TF_RETURN_IF_ERROR(BuildSignature(function, constant_args, fixed_shape_args,
-                                    host_args, variable_args, ctx, &signature,
-                                    is_mlir));
+                                    fixed_shape_data_args, host_args,
+                                    variable_args, ctx, &signature, is_mlir));
   Signature::Hash hash;
   auto hash_sig = hash(signature);
   VLOG(2) << "Signature: " << SignatureDebugString(signature);
@@ -1334,8 +1347,8 @@ Status TaoCompilationCache::CompileImplAsync(
         // expensive. Try to move some work to the background thread in order to
         // reduce overhead in the critical path.
         entry->compilation_status = PrepareCompilerInput(
-            function, constant_args, fixed_shape_args, host_args, variable_args,
-            ctx, &input, is_mlir);
+            function, constant_args, fixed_shape_args, fixed_shape_data_args,
+            host_args, variable_args, ctx, &input, is_mlir);
         TF_RETURN_IF_ERROR(entry->compilation_status);
 
         auto raw_input_ptr = input_ptr.release();

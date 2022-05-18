@@ -47,6 +47,7 @@ class TaoCompilationCache : public ResourceBase {
                  const NameAttrList& function,
                  const std::map<int, Tensor>& constant_args,
                  const std::set<int>& fixed_shape_args,
+                 const std::set<int>& fixed_shape_data_args,
                  const std::set<int>& host_args,
                  const std::map<int, OptionalTensor>& variable_args,
                  OpKernelContext* ctx, Executable** executable,
@@ -59,7 +60,9 @@ class TaoCompilationCache : public ResourceBase {
 
   static uint64 GetSignatureHash(
       const NameAttrList& function, const std::map<int, Tensor>& constant_args,
-      const std::set<int>& fixed_shape_args, const std::set<int>& host_args,
+      const std::set<int>& fixed_shape_args,
+      const std::set<int>& fixed_shape_data_args,
+      const std::set<int>& host_args,
       const std::map<int, OptionalTensor>& variable_args, OpKernelContext* ctx,
       bool is_mlir);
 
@@ -68,6 +71,7 @@ class TaoCompilationCache : public ResourceBase {
                      const NameAttrList& function,
                      const std::map<int, Tensor>& constant_args,
                      const std::set<int>& fixed_shape_args,
+                     const std::set<int>& fixed_shape_data_args,
                      const std::set<int>& host_args,
                      const std::map<int, OptionalTensor>& variable_args,
                      OpKernelContext* ctx, Executable** executable,
@@ -77,6 +81,7 @@ class TaoCompilationCache : public ResourceBase {
                           const NameAttrList& function,
                           const std::map<int, Tensor>& constant_args,
                           const std::set<int>& fixed_shape_args,
+                          const std::set<int>& fixed_shape_data_args,
                           const std::set<int>& host_args,
                           const std::map<int, OptionalTensor>& variable_args,
                           OpKernelContext* ctx, Executable** executable,
@@ -114,7 +119,9 @@ class TaoCompilationCache : public ResourceBase {
   // Builds the signature for a compilation.
   static Status BuildSignature(
       const NameAttrList& function, const std::map<int, Tensor>& constant_args,
-      const std::set<int>& fixed_shape_args, const std::set<int>& host_args,
+      const std::set<int>& fixed_shape_args,
+      const std::set<int>& fixed_shape_data_args,
+      const std::set<int>& host_args,
       const std::map<int, OptionalTensor>& variable_args, OpKernelContext* ctx,
       Signature* signature, bool is_mlir = false);
 

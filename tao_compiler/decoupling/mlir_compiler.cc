@@ -188,6 +188,8 @@ Status AppendIOAttr(mlir::ModuleOp module, const GraphImportConfig& specs,
       input_placements.push_back("const");
     } else if (arg_proto.kind_v2() == ArgumentKind::kFixedShaped) {
       input_placements.push_back("cpu");
+    } else if (arg_proto.kind_v2() == ArgumentKind::kFixedShapedData) {
+      input_placements.push_back("gpu");
     } else if (arg_proto.kind_v2() == ArgumentKind::kHostArgs) {
       input_placements.push_back("cpu");
     } else {
@@ -251,7 +253,8 @@ Status AppendIOAttr(mlir::ModuleOp module, const GraphImportConfig& specs,
       }
       attributes.push_back(builder.getNamedAttr(attr_name, attr));
 
-    } else if (arg_proto.kind_v2() == ArgumentKind::kFixedShaped) {
+    } else if (arg_proto.kind_v2() == ArgumentKind::kFixedShaped ||
+               arg_proto.kind_v2() == ArgumentKind::kFixedShapedData) {
       auto attr_name =
           (mlir::disc_ral::kDhloInputShapeAttr + ("_" + llvm::Twine(i))).str();
       SmallVector<int64_t, 4> input_shape;

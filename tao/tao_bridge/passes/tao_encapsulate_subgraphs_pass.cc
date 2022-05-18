@@ -60,6 +60,8 @@ const char* const kXlaCompiledKernelAttr = "_TaoXlaCompiledKernel";
 const char* const kXlaNumConstantArgsAttr = "_TaoXlaNumConstantArgs";
 const char* const kXlaNumResourceArgsAttr = "_TaoXlaNumResourceArgs";
 const char* const kMlirNumFixedShapeArgsAttr = "_TaoMlirNumFixedShapeArgs";
+const char* const kMlirNumFixedShapeDataArgsAttr =
+    "_TaoMlirNumFixedShapeDataArgs";
 const char* const kMlirNumHostArgsAttr = "_TaoMlirNumHostArgs";
 const char* const kMlirNumHostRetsAttr = "_TaoMlirNumHostRets";
 const char* const kXlaHostTransferSequencerAttr =
@@ -2652,137 +2654,179 @@ Status TaoEncapsulateSubgraphsPass::Run(
   FunctionLibraryRuntime* flr =
       pflr->GetFLR(ProcessFunctionLibraryRuntime::kDefaultFLRDevice);
 
-  auto rewrite_subgraph =
-      [flr, this](const std::vector<OutputTensor>& arg_source_tensors,
-                  std::unique_ptr<Graph>* subgraph,
-                  std::vector<int>* input_permutation,
-                  std::vector<int>* output_permutation, NodeDef* node) {
-        // Optimize the subgraph.
-        OptimizeGraph(flr, subgraph);
+  auto rewrite_subgraph = [flr, this](const std::vector<OutputTensor>&
+                                          arg_source_tensors,
+                                      std::unique_ptr<Graph>* subgraph,
+                                      std::vector<int>* input_permutation,
+                                      std::vector<int>* output_permutation,
+                                      NodeDef* node) {
+    // Optimize the subgraph.
+    OptimizeGraph(flr, subgraph);
 
-        const int num_args = input_permutation->size();
-        std::vector<bool> const_args(num_args);
-        std::vector<bool> fixed_shape_args(num_args);
-        if (inner_) {
-          TF_RETURN_IF_ERROR(BackwardsConstAnalysis(
-              **subgraph, &const_args,
-              /*compile_time_const_nodes=*/nullptr, &fixed_shape_args,
-              /*compile_time_fixed_shape_nodes=*/nullptr, flr,
-              [](const Edge& e) { return true; },
-              /*is_mlir*/ true));
-        } else {
-          TF_RETURN_IF_ERROR(BackwardsConstAnalysis(
-              **subgraph, &const_args,
-              /*compile_time_const_nodes=*/nullptr,
-              /*compile_time_fixed_shape_arg_indices*/ nullptr,
-              /*compile_time_fixed_shape_nodes=*/nullptr, flr));
-        }
+    const int num_args = input_permutation->size();
+    std::vector<bool> const_args(num_args);
+    std::vector<bool> fixed_shape_args(num_args);
+    std::vector<bool> fixed_shape_data_args(num_args);
+    if (inner_) {
+      TF_RETURN_IF_ERROR(BackwardsConstAnalysis(
+          **subgraph, &const_args,
+          /*compile_time_const_nodes=*/nullptr, &fixed_shape_args,
+          /*compile_time_fixed_shape_nodes=*/nullptr, flr,
+          [](const Edge& e) { return true; },
+          /*is_mlir*/ true));
+    } else {
+      TF_RETURN_IF_ERROR(BackwardsConstAnalysis(
+          **subgraph, &const_args,
+          /*compile_time_const_nodes=*/nullptr,
+          /*compile_time_fixed_shape_arg_indices*/ nullptr,
+          /*compile_time_fixed_shape_nodes=*/nullptr, flr));
+    }
 
-        DataTypeVector arg_types(num_args);
-        TF_RETURN_IF_ERROR(GetArgTypes(**subgraph, &arg_types));
-
-        // Compute a permutation of the arguments such that the constant
-        // arguments are first.
-        // For Xla, the inputs are renumbered in the format:
-        //   [ConstInputs, FixedShapeInputs(others), ResourceInputs]
-        // For Mlir, the format is:
-        //   [ConstInputs, FixedShapeInputs,
-        //   FixedRankDynamicShapeInputs(others), ResourceInputs]
-        const int num_consts =
-            std::count(const_args.begin(), const_args.end(), true);
-        // always zero for outer xla
-        const int num_fixed_shapes =
-            std::count(fixed_shape_args.begin(), fixed_shape_args.end(), true);
-        const int num_resources =
-            std::count(arg_types.begin(), arg_types.end(), DT_RESOURCE);
-        int num_host_args = 0;
-        if (inner_) {
-          for (size_t i = 0; i < const_args.size(); ++i) {
-            if (const_args[i] || fixed_shape_args[i]) {
-              continue;
-            } else if (arg_types[i] == DT_INT32) {
-              ++num_host_args;
+    assert(arg_source_tensors.size() == num_args);
+    for (size_t i = 0; i < arg_source_tensors.size(); ++i) {
+      if (fixed_shape_args[i] || const_args[i]) {
+        continue;
+      }
+      const Node* src_node = arg_source_tensors[i].node;
+      if (src_node->type_string() == "Identity") {
+        for (auto in_edge : src_node->in_edges()) {
+          if (!in_edge->IsControlEdge() &&
+              in_edge->src()->type_string() == "VariableV2") {
+            bool static_shape = true;
+            if (in_edge->src()->def().attr().count("shape") == 0) {
+              static_shape = false;
+              break;
             }
+            TensorShapeProto shape_proto =
+                in_edge->src()->def().attr().at("shape").shape();
+            for (const auto& dim_proto : shape_proto.dim()) {
+              if (dim_proto.size() < 0) {
+                static_shape = false;
+                break;
+              }
+            }
+            if (static_shape) {
+              fixed_shape_data_args[i] = true;
+            }
+            break;
           }
         }
-        const int num_nonconsts_or_fixedshape = num_args - num_resources -
-                                                num_consts - num_fixed_shapes -
-                                                num_host_args;
-        if (num_nonconsts_or_fixedshape < 0) {
+      }
+    }
+
+    DataTypeVector arg_types(num_args);
+    TF_RETURN_IF_ERROR(GetArgTypes(**subgraph, &arg_types));
+
+    // Compute a permutation of the arguments such that the constant
+    // arguments are first.
+    // For Xla, the inputs are renumbered in the format:
+    //   [ConstInputs, FixedShapeInputs(others), ResourceInputs]
+    // For Mlir, the format is:
+    //   [ConstInputs, FixedShapeInputs,
+    //   FixedRankDynamicShapeInputs(others), ResourceInputs]
+    const int num_consts =
+        std::count(const_args.begin(), const_args.end(), true);
+    // always zero for outer xla
+    const int num_fixed_shapes =
+        std::count(fixed_shape_args.begin(), fixed_shape_args.end(), true);
+    const int num_fixed_shape_datas = std::count(
+        fixed_shape_data_args.begin(), fixed_shape_data_args.end(), true);
+    const int num_resources =
+        std::count(arg_types.begin(), arg_types.end(), DT_RESOURCE);
+    int num_host_args = 0;
+    if (inner_) {
+      for (size_t i = 0; i < const_args.size(); ++i) {
+        if (const_args[i] || fixed_shape_args[i] || fixed_shape_data_args[i]) {
+          continue;
+        } else if (arg_types[i] == DT_INT32) {
+          ++num_host_args;
+        }
+      }
+    }
+    const int num_nonconsts_or_fixedshape =
+        num_args - num_resources - num_consts - num_fixed_shapes -
+        num_fixed_shape_datas - num_host_args;
+    if (num_nonconsts_or_fixedshape < 0) {
+      return errors::Internal(
+          "num_nonconsts_or_fixedshape should be >= 0, was ",
+          num_nonconsts_or_fixedshape);
+    }
+
+    int const_pos = 0;
+    int fixed_shape_pos = num_consts;
+    int fixed_shape_data_pos = fixed_shape_pos + num_fixed_shapes;
+    int host_arg_pos = fixed_shape_data_pos + num_fixed_shape_datas;
+    int device_arg_pos = host_arg_pos + num_host_args;
+    int resource_pos = device_arg_pos + num_nonconsts_or_fixedshape;
+    for (int i = 0; i < num_args; ++i) {
+      if (const_args[i]) {
+        if (arg_types[i] == DT_RESOURCE) {
           return errors::Internal(
-              "num_nonconsts_or_fixedshape should be >= 0, was ",
-              num_nonconsts_or_fixedshape);
+              "Resource arguments cannot be constant (argument ", i, ")");
         }
-
-        int const_pos = 0;
-        int fixed_shape_pos = num_consts;
-        int host_arg_pos = fixed_shape_pos + num_fixed_shapes;
-        int device_arg_pos = host_arg_pos + num_host_args;
-        int resource_pos = device_arg_pos + num_nonconsts_or_fixedshape;
-        for (int i = 0; i < num_args; ++i) {
-          if (const_args[i]) {
-            if (arg_types[i] == DT_RESOURCE) {
-              return errors::Internal(
-                  "Resource arguments cannot be constant (argument ", i, ")");
-            }
-            (*input_permutation)[i] = const_pos;
-            ++const_pos;
-          } else if (fixed_shape_args[i]) {
-            if (arg_types[i] == DT_RESOURCE) {
-              return errors::Internal(
-                  "Resource arguments cannot be fixed shape(argument ", i, ")");
-            }
-            (*input_permutation)[i] = fixed_shape_pos;
-            ++fixed_shape_pos;
-          } else if (arg_types[i] == DT_RESOURCE) {
-            (*input_permutation)[i] = resource_pos;
-            ++resource_pos;
-          } else if (num_host_args > 0 && arg_types[i] == DT_INT32) {
-            (*input_permutation)[i] = host_arg_pos;
-            ++host_arg_pos;
-          } else {
-            (*input_permutation)[i] = device_arg_pos;
-            ++device_arg_pos;
-          }
+        (*input_permutation)[i] = const_pos;
+        ++const_pos;
+      } else if (fixed_shape_args[i]) {
+        if (arg_types[i] == DT_RESOURCE) {
+          return errors::Internal(
+              "Resource arguments cannot be fixed shape(argument ", i, ")");
         }
-
-        // Renumber argument nodes in the graph.
-        TF_RETURN_IF_ERROR(
-            RenumberArguments(subgraph->get(), *input_permutation));
-
-        // TODO(phawkins): add a forward is-constant analysis, similarly split
-        // outputs into host-memory constants and device-memory non-constants.
-
-        AddNodeAttr(kXlaCompiledKernelAttr, true, node);
-        AddNodeAttr(kXlaNumConstantArgsAttr, num_consts, node);
-        AddNodeAttr(kXlaNumResourceArgsAttr, num_resources, node);
-        AddNodeAttr(kMlirNumFixedShapeArgsAttr, num_fixed_shapes, node);
-        AddNodeAttr(kMlirNumHostArgsAttr, num_host_args, node);
-
-        int num_host_rets = 0;
-        if (inner_) {
-          int num_rets = output_permutation->size();
-          DataTypeVector ret_types(num_rets);
-          TF_RETURN_IF_ERROR(GetRetTypes(**subgraph, &ret_types));
-          num_host_rets =
-              std::count(ret_types.begin(), ret_types.end(), DT_INT32);
-          int host_rets_pos = 0;
-          int device_rets_pos = num_host_rets;
-          for (int i = 0; i < num_rets; ++i) {
-            if (ret_types[i] == DT_INT32) {
-              (*output_permutation)[i] = host_rets_pos++;
-            } else {
-              (*output_permutation)[i] = device_rets_pos++;
-            }
-          }
-          // Renumber argument nodes in the graph.
-          TF_RETURN_IF_ERROR(
-              RenumberResults(subgraph->get(), *output_permutation));
+        (*input_permutation)[i] = fixed_shape_pos;
+        ++fixed_shape_pos;
+      } else if (fixed_shape_data_args[i]) {
+        if (arg_types[i] == DT_RESOURCE) {
+          return errors::Internal(
+              "Resource arguments cannot be fixed shape(argument ", i, ")");
         }
-        AddNodeAttr(kMlirNumHostRetsAttr, num_host_rets, node);
+        (*input_permutation)[i] = fixed_shape_data_pos;
+        ++fixed_shape_data_pos;
+      } else if (arg_types[i] == DT_RESOURCE) {
+        (*input_permutation)[i] = resource_pos;
+        ++resource_pos;
+      } else if (num_host_args > 0 && arg_types[i] == DT_INT32) {
+        (*input_permutation)[i] = host_arg_pos;
+        ++host_arg_pos;
+      } else {
+        (*input_permutation)[i] = device_arg_pos;
+        ++device_arg_pos;
+      }
+    }
 
-        return Status::OK();
-      };
+    // Renumber argument nodes in the graph.
+    TF_RETURN_IF_ERROR(RenumberArguments(subgraph->get(), *input_permutation));
+
+    // TODO(phawkins): add a forward is-constant analysis, similarly split
+    // outputs into host-memory constants and device-memory non-constants.
+
+    AddNodeAttr(kXlaCompiledKernelAttr, true, node);
+    AddNodeAttr(kXlaNumConstantArgsAttr, num_consts, node);
+    AddNodeAttr(kXlaNumResourceArgsAttr, num_resources, node);
+    AddNodeAttr(kMlirNumFixedShapeArgsAttr, num_fixed_shapes, node);
+    AddNodeAttr(kMlirNumFixedShapeDataArgsAttr, num_fixed_shape_datas, node);
+    AddNodeAttr(kMlirNumHostArgsAttr, num_host_args, node);
+
+    int num_host_rets = 0;
+    if (inner_) {
+      int num_rets = output_permutation->size();
+      DataTypeVector ret_types(num_rets);
+      TF_RETURN_IF_ERROR(GetRetTypes(**subgraph, &ret_types));
+      num_host_rets = std::count(ret_types.begin(), ret_types.end(), DT_INT32);
+      int host_rets_pos = 0;
+      int device_rets_pos = num_host_rets;
+      for (int i = 0; i < num_rets; ++i) {
+        if (ret_types[i] == DT_INT32) {
+          (*output_permutation)[i] = host_rets_pos++;
+        } else {
+          (*output_permutation)[i] = device_rets_pos++;
+        }
+      }
+      // Renumber argument nodes in the graph.
+      TF_RETURN_IF_ERROR(RenumberResults(subgraph->get(), *output_permutation));
+    }
+    AddNodeAttr(kMlirNumHostRetsAttr, num_host_rets, node);
+
+    return Status::OK();
+  };
 
   TF_RETURN_WITH_CONTEXT_IF_ERROR(
       EncapsulateSubgraphsInFunctions(

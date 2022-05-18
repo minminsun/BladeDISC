@@ -18,6 +18,7 @@ LaunchBase::LaunchBase(OpKernelConstruction* ctx)
       ctx_(ctx),
       constants_(ConstantsVector()),
       fixed_shapes_(FixedShapesVector()),
+      fixed_shape_datas_(FixedShapeDatasVector()),
       host_args_(HostArgsVector()),
       resources_(ResourcesVector()) {
   OP_REQUIRES_OK(ctx, PlatformInfoFromContext(ctx_, &platform_info_));
@@ -89,6 +90,27 @@ std::vector<int> LaunchBase::FixedShapesVector() {
   return fixed_shaped;
 }
 
+std::vector<int> LaunchBase::FixedShapeDatasVector() {
+  std::vector<int> fixed_shaped_data;
+  if (ctx_->HasAttr("Tfixedshapes") && ctx_->HasAttr("Tfixedshapedatas")) {
+    DataTypeVector constant_types;
+    OP_REQUIRES_OK_RETURN(ctx_, std::vector<int>(),
+                          ctx_->GetAttr("Tconstants", &constant_types));
+    DataTypeVector fixed_shaped_types;
+    OP_REQUIRES_OK_RETURN(ctx_, std::vector<int>(),
+                          ctx_->GetAttr("Tfixedshapes", &fixed_shaped_types));
+    DataTypeVector fixed_shaped_data_types;
+    OP_REQUIRES_OK_RETURN(
+        ctx_, std::vector<int>(),
+        ctx_->GetAttr("Tfixedshapedatas", &fixed_shaped_data_types));
+
+    fixed_shaped_data.resize(fixed_shaped_data_types.size());
+    std::iota(fixed_shaped_data.begin(), fixed_shaped_data.end(),
+              constant_types.size() + fixed_shaped_types.size());
+  }
+  return fixed_shaped_data;
+}
+
 std::vector<int> LaunchBase::HostArgsVector() {
   std::vector<int> host_args;
   if (ctx_->HasAttr("Thostargs") && ctx_->HasAttr("Tfixedshapes")) {
@@ -100,13 +122,19 @@ std::vector<int> LaunchBase::HostArgsVector() {
     OP_REQUIRES_OK_RETURN(ctx_, std::vector<int>(),
                           ctx_->GetAttr("Tfixedshapes", &fixed_shaped_types));
 
+    DataTypeVector fixed_shaped_data_types;
+    OP_REQUIRES_OK_RETURN(
+        ctx_, std::vector<int>(),
+        ctx_->GetAttr("Tfixedshapedatas", &fixed_shaped_data_types));
+
     DataTypeVector host_arg_types;
     OP_REQUIRES_OK_RETURN(ctx_, std::vector<int>(),
                           ctx_->GetAttr("Thostargs", &host_arg_types));
 
     host_args.resize(host_arg_types.size());
     std::iota(host_args.begin(), host_args.end(),
-              constant_types.size() + fixed_shaped_types.size());
+              constant_types.size() + fixed_shaped_types.size() +
+                  fixed_shaped_data_types.size());
   }
   return host_args;
 }
@@ -120,6 +148,13 @@ std::vector<int> LaunchBase::ResourcesVector() {
   if (ctx_->HasAttr("Tfixedshapes")) {
     OP_REQUIRES_OK_RETURN(ctx_, std::vector<int>(),
                           ctx_->GetAttr("Tfixedshapes", &fixed_shaped_types));
+  }
+
+  DataTypeVector fixed_shaped_data_types;
+  if (ctx_->HasAttr("Tfixedshapedatas")) {
+    OP_REQUIRES_OK_RETURN(
+        ctx_, std::vector<int>(),
+        ctx_->GetAttr("Tfixedshapedatas", &fixed_shaped_data_types));
   }
 
   DataTypeVector host_arg_types;
@@ -139,7 +174,8 @@ std::vector<int> LaunchBase::ResourcesVector() {
   std::vector<int> resources(num_resources);
   std::iota(resources.begin(), resources.end(),
             constant_types.size() + fixed_shaped_types.size() +
-                host_arg_types.size() + arg_types.size());
+                fixed_shaped_data_types.size() + host_arg_types.size() +
+                arg_types.size());
   return resources;
 }
 

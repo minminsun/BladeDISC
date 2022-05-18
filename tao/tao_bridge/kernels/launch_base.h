@@ -85,6 +85,7 @@ class LaunchBase : public AsyncOpKernel {
 
   const std::vector<int>& ConstantsAttr() { return constants_; }
   const std::vector<int>& FixedShapesAttr() { return fixed_shapes_; }
+  const std::vector<int>& FixedShapeDatasAttr() { return fixed_shape_datas_; }
   const std::vector<int>& HostArgsAttr() { return host_args_; }
   const std::vector<int>& ResourcesAttr() { return resources_; }
   PlatformInfo& PlatformInfoCtx() { return platform_info_; }
@@ -221,6 +222,8 @@ class LaunchBase : public AsyncOpKernel {
   std::vector<int> ConstantsVector();
   // return attr->fixed_shapes as vector
   std::vector<int> FixedShapesVector();
+  // return attr->fixed_shape_datas as vector
+  std::vector<int> FixedShapeDatasVector();
   // return attr->host_args as vector
   std::vector<int> HostArgsVector();
   // return attr->resources as vector
@@ -229,6 +232,7 @@ class LaunchBase : public AsyncOpKernel {
   OpKernelConstruction* ctx_;
   std::vector<int> constants_;
   std::vector<int> fixed_shapes_;
+  std::vector<int> fixed_shape_datas_;
   std::vector<int> host_args_;
   std::vector<int> resources_;
   PlatformInfo platform_info_;

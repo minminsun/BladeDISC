@@ -80,6 +80,8 @@ Status DiscLaunchOp::CompileAndRunMlir(OpKernelContext* ctx, DoneHelper* helper,
     for (auto&& v : ConstantsAttr()) VLOG(1) << "\tconst_idx: " << v;
     VLOG(0) << "Fix shape (" << FixedShapesAttr().size() << "):";
     for (auto&& v : FixedShapesAttr()) VLOG(1) << "\tfix_shape_idx: " << v;
+    VLOG(0) << "Fix shape data (" << FixedShapeDatasAttr().size() << "):";
+    for (auto&& v : FixedShapeDatasAttr()) VLOG(1) << "\tfix_shape_idx: " << v;
     VLOG(0) << "Resource (" << ResourcesAttr().size() << "):";
     for (auto&& v : ResourcesAttr()) VLOG(1) << "\tresource_idx: " << v;
   }
@@ -192,12 +194,16 @@ Status DiscLaunchOp::CompileToLocalExecutable(
   }
 
   std::set<int> fixed_shape_args;
+  std::set<int> fixed_shape_data_args;
   std::set<int> host_args_set;
   fixed_shape_args.insert(FixedShapesAttr().begin(), FixedShapesAttr().end());
+  fixed_shape_data_args.insert(FixedShapeDatasAttr().begin(),
+                               FixedShapeDatasAttr().end());
   host_args_set.insert(HostArgsAttr().begin(), HostArgsAttr().end());
-  auto status = cache->Compile(std::move(input_ptr), function, constant_args,
-                               fixed_shape_args, host_args_set, *variables, ctx,
-                               executable, stat, is_mlir, call_info);
+  auto status =
+      cache->Compile(std::move(input_ptr), function, constant_args,
+                     fixed_shape_args, fixed_shape_data_args, host_args_set,
+                     *variables, ctx, executable, stat, is_mlir, call_info);
   TaoCompInfoCollector::Get().SetCallTimestamp(call_info,
                                                TIME_COMPILE_CALL_END);
   return status;
