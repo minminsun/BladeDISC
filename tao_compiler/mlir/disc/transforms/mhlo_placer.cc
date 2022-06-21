@@ -397,7 +397,7 @@ void OpsPlacer::placeI32Ops() {
       auto operand_ty =
           op->getOperand(dominant_idx).getType().dyn_cast<RankedTensorType>();
       assert(operand_ty && "unexpected non unranked type of operand");
-      if (operand_ty.getElementType().isInteger(32)) {
+      if (operand_ty.getElementType().isInteger(32) and operand_ty.getRank() <= 1) {
         is_shape_calc_op = true;
       }
     } else {
@@ -411,7 +411,7 @@ void OpsPlacer::placeI32Ops() {
             op->getOperand(i).getType().dyn_cast<RankedTensorType>();
         if (!operand_ty) continue;
         auto elem_type = operand_ty.getElementType();
-        if (elem_type.isInteger(32)) {
+        if (elem_type.isInteger(32) and operand_ty.getRank() <= 1) {
           is_shape_calc_op = true;
           break;
         }

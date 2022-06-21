@@ -16,6 +16,7 @@ limitations under the License.
 #include "tao_bridge/passes/tao_optimization_pass.h"
 
 #include <algorithm>
+#include <mutex>
 
 #include "tao_bridge/passes/tao_bace_reformat_pass.h"
 #include "tao_bridge/passes/tao_build_tao_op_pass.h"
@@ -46,7 +47,10 @@ void DumpGraph(const GraphOptimizationPassOptions& options,
 
 }  // namespace
 
+static std::mutex mu_;
+
 Status TaoOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
+  std::lock_guard<std::mutex> guard(mu_);
   static std::atomic<int> optimization_counter{0};
 
   bool enable_tao = GetTaoBridgeOptions()->enable_tao;
@@ -136,7 +140,9 @@ Status TaoOptimizationPass::Run(const GraphOptimizationPassOptions& options) {
   }
   mark_pass.set_name("TaoMarkForCompilationPass");
   mark_pass.set_opts(opts_);
+  VLOG(1) << 0;
   TF_RETURN_IF_ERROR(mark_pass.Run(options));
+  VLOG(1) << 1;
 
   if (!mlir_whole_graph_compilation) {
     DumpGraph(options, "before_tao_decluster_pass");

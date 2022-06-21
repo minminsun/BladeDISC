@@ -51,7 +51,6 @@ def format_package_name():
 
 # What packages are required for this module to be executed?
 REQUIRED = [
-    detect_host_tf_version()
 ]
 
 SETUP_REQUIRED = [

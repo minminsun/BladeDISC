@@ -2696,7 +2696,7 @@ Status TaoEncapsulateSubgraphsPass::Run(
         const int num_resources =
             std::count(arg_types.begin(), arg_types.end(), DT_RESOURCE);
         int num_host_args = 0;
-        if (inner_) {
+        if (false) {
           for (size_t i = 0; i < const_args.size(); ++i) {
             if (const_args[i] || fixed_shape_args[i]) {
               continue;

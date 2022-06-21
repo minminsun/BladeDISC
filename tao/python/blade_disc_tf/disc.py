@@ -57,6 +57,7 @@ def enable(disc_cpu=False, num_intra_op_threads=1, fast_math_level=4):
     os.environ.setdefault("TAO_COMPILER_PATH", disc_compiler_path)
     os.environ.setdefault("TAO_COMPILATION_MODE_ASYNC", "false")
     os.environ.setdefault("TAO_MLIR_BRANCH_ONLY", "true")
+    os.environ.setdefault("TAO_EXPERIMENTAL_ENABLE_MLIR_WHOLE_GRAPH_COMPILATION", "true")
     if disc_cpu:
         os.environ.setdefault("TAO_FLAGS", "--tf_xla_auto_jit=2 --tf_xla_cpu_global_jit")
         os.environ.setdefault("OMP_NUM_THREADS", str(num_intra_op_threads))
